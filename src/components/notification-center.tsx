@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 
 import type { NotificationDTO } from "@/lib/types/contracts";
+import { formatDateTimeDisplay } from "@/lib/format/date-display";
 
 export function NotificationCenter({ initialNotifications }: { initialNotifications: NotificationDTO[] }) {
   const [notifications, setNotifications] = useState(initialNotifications);
@@ -52,7 +53,7 @@ export function NotificationCenter({ initialNotifications }: { initialNotificati
           <p className="mt-2 text-sm text-slate-700">{notification.body}</p>
 
           <div className="mt-3 flex items-center gap-2 text-xs text-slate-500">
-            <span>{new Date(notification.createdAt).toLocaleString()}</span>
+            <span>{formatDateTimeDisplay(notification.createdAt)}</span>
             {notification.dealId && (
               <>
                 <span>•</span>

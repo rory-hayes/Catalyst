@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 
 import type { DealSnapshotDTO, ModuleDTO } from "@/lib/types/contracts";
+import { formatDateDisplay } from "@/lib/format/date-display";
 
 type Lens = "AE" | "SE";
 
@@ -177,7 +178,7 @@ export function DossierSummary({
             <div className="mb-2 flex items-center justify-between">
               <h4 className="text-base font-semibold text-slate-900">{section.title}</h4>
               <p className="text-xs text-slate-500">
-                Last updated {new Date(section.lastUpdatedAt).toLocaleDateString()}
+                Last updated {formatDateDisplay(section.lastUpdatedAt)}
               </p>
             </div>
 

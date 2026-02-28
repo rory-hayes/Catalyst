@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 
 import type { DealSnapshotDTO } from "@/lib/types/contracts";
 import { StatusBadge } from "@/components/status-badge";
+import { formatDateDisplay } from "@/lib/format/date-display";
 
 type EditableField = "nextStep" | "closeDate";
 
@@ -117,7 +118,7 @@ export function DealsTable({
                   </td>
                   {!compact && (
                     <td className="px-4 py-3 text-slate-600">
-                      {row.lastActivityAt ? new Date(row.lastActivityAt).toLocaleDateString() : "No activity"}
+                      {formatDateDisplay(row.lastActivityAt, "No activity")}
                     </td>
                   )}
                   <td className="px-4 py-3">
