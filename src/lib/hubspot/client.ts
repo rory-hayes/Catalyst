@@ -22,6 +22,12 @@ export interface HubSpotDealRecord {
   properties: Record<string, string | null>;
 }
 
+interface HubSpotLocalDevRefreshResponse {
+  oauthAccessToken: string;
+  expiresAtMillis: number;
+  scopeGroups?: string[];
+}
+
 const HUBSPOT_TIMEOUT_MS = 15_000;
 
 async function hubspotFetch<T>(
@@ -78,8 +84,19 @@ async function hubspotFetch<T>(
 }
 
 export async function getDealById(token: string, crmDealId: string): Promise<HubSpotDealRecord> {
+  const properties = [
+    "dealname",
+    "amount",
+    "closedate",
+    "dealstage",
+    "pipeline",
+    "hs_next_step",
+    "hs_lastmodifieddate",
+    "hs_lastactivitydate",
+  ].join(",");
+
   const response = await hubspotFetch<HubSpotDealRecord>(
-    `/crm/v3/objects/deals/${crmDealId}`,
+    `/crm/v3/objects/deals/${crmDealId}?properties=${encodeURIComponent(properties)}`,
     token,
     { method: "GET" },
   );
@@ -145,4 +162,41 @@ export async function listRecentDealActivities(
     body: result.properties.hs_note_body ?? "",
     createdAt: result.properties.hs_timestamp ?? new Date().toISOString(),
   }));
+}
+
+export async function refreshAccessTokenFromPersonalAccessKey(params: {
+  encodedOAuthRefreshToken: string;
+  portalId?: number;
+}): Promise<{
+  accessToken: string;
+  expiresAt: Date;
+  scopes: string[];
+}> {
+  const response = await fetch(`${env.HUBSPOT_API_BASE_URL}/localdevauth/v1/auth/refresh`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      encodedOAuthRefreshToken: params.encodedOAuthRefreshToken,
+      ...(params.portalId ? { portalId: params.portalId } : {}),
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+
+    if (response.status === 400 || response.status === 401 || response.status === 403) {
+      throw new HubSpotConnectorError(`HubSpot token refresh failed: ${body}`, "permission_missing");
+    }
+
+    throw new HubSpotConnectorError(`HubSpot token refresh failed (${response.status}): ${body}`, "unknown");
+  }
+
+  const data = (await response.json()) as HubSpotLocalDevRefreshResponse;
+  return {
+    accessToken: data.oauthAccessToken,
+    expiresAt: new Date(data.expiresAtMillis),
+    scopes: data.scopeGroups ?? [],
+  };
 }

@@ -12,6 +12,7 @@ import {
   createDealNote,
   getDealById,
   HubSpotConnectorError,
+  refreshAccessTokenFromPersonalAccessKey,
   updateDealProperties,
 } from "@/lib/hubspot/client";
 import { trackAudit, trackMetric } from "@/lib/metrics/events";
@@ -121,11 +122,52 @@ async function getHubSpotToken(workspaceId: string): Promise<string> {
     },
   });
 
-  if (!connection?.encryptedAccessToken) {
+  if (!connection) {
     throw new Error("HubSpot connection is missing for this workspace.");
   }
 
-  return connection.encryptedAccessToken;
+  const existingToken = connection.encryptedAccessToken;
+  const hasFreshToken =
+    existingToken !== null &&
+    existingToken.length > 0 &&
+    (connection.expiresAt === null || connection.expiresAt.getTime() - Date.now() > 2 * 60 * 1000);
+
+  if (hasFreshToken) {
+    return existingToken;
+  }
+
+  // For HubSpot CLI-authenticated testing accounts, encryptedRefreshToken stores the PAK and
+  // can be exchanged for a short-lived access token via localdevauth.
+  if (connection.encryptedRefreshToken) {
+    try {
+      const refreshed = await refreshAccessTokenFromPersonalAccessKey({
+        encodedOAuthRefreshToken: connection.encryptedRefreshToken,
+      });
+
+      await prisma.crmConnection.update({
+        where: { id: connection.id },
+        data: {
+          encryptedAccessToken: refreshed.accessToken,
+          expiresAt: refreshed.expiresAt,
+          scopes: refreshed.scopes,
+          status: "CONNECTED",
+        },
+      });
+
+      return refreshed.accessToken;
+    } catch (error) {
+      if (existingToken) {
+        return existingToken;
+      }
+      throw error;
+    }
+  }
+
+  if (!existingToken) {
+    throw new Error("HubSpot connection is missing for this workspace.");
+  }
+
+  return existingToken;
 }
 
 async function loadDealForWorkspace(workspaceId: string, dealId: string) {
@@ -701,7 +743,7 @@ export async function processRefreshJob(params: {
   const token = await getHubSpotToken(params.workspaceId);
   const remoteDeal = await getDealById(token, deal.crmDealId);
 
-  const crmNextStep = remoteDeal.properties.next_step ?? null;
+  const crmNextStep = remoteDeal.properties.hs_next_step ?? remoteDeal.properties.next_step ?? null;
   const crmStage = remoteDeal.properties.dealstage ?? deal.stage;
   const crmCloseDate = remoteDeal.properties.closedate
     ? new Date(Number(remoteDeal.properties.closedate)).toISOString()
@@ -804,11 +846,12 @@ async function getSyncPatchPayload(dealId: string) {
     }
 
     if (draft.fieldKey === "nextStep") {
-      dealPropertyPatch.next_step = normalizeTopLevelCrmProperty(draft.fieldKey, draft.draftValueJson);
+      dealPropertyPatch.hs_next_step = normalizeTopLevelCrmProperty(draft.fieldKey, draft.draftValueJson);
     }
 
     if (draft.fieldKey === "nextStepDueDate") {
-      dealPropertyPatch.next_step_due_date = normalizeTopLevelCrmProperty(draft.fieldKey, draft.draftValueJson);
+      // HubSpot has no default writable "next step due date" deal property.
+      // Keep this in Blueprint + sync note until an org maps a custom deal property.
     }
 
     if (draft.fieldKey === "closeDate") {
