@@ -1,0 +1,69 @@
+databases:
+  - name: blueprint-postgres
+    databaseName: blueprint
+    user: blueprint
+    plan: starter
+
+services:
+  - type: keyvalue
+    name: blueprint-redis
+    plan: starter
+    maxmemoryPolicy: noeviction
+    ipAllowList: []
+
+  - type: web
+    name: blueprint-web
+    runtime: node
+    plan: starter
+    buildCommand: npm ci && npm run db:generate && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: blueprint-postgres
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: blueprint-redis
+          property: connectionString
+      - key: CRON_SECRET
+        generateValue: true
+      - key: DEV_USER_EMAIL
+        value: ae@blueprint.dev
+
+  - type: worker
+    name: blueprint-worker
+    runtime: node
+    plan: starter
+    buildCommand: npm ci && npm run db:generate
+    startCommand: npm run worker
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: blueprint-postgres
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: blueprint-redis
+          property: connectionString
+
+  - type: cron
+    name: blueprint-eod-dispatch
+    runtime: node
+    schedule: "0 * * * *"
+    buildCommand: npm ci
+    startCommand: node -e "fetch(`http://${process.env.BLUEPRINT_WEB_HOSTPORT}/api/cron/eod-dispatch`, { method: 'POST', headers: { Authorization: `Bearer ${process.env.CRON_SECRET}` } }).then(async (res) => { console.log(res.status, await res.text()); if (!res.ok) process.exit(1); }).catch((err) => { console.error(err); process.exit(1); });"
+    envVars:
+      - key: BLUEPRINT_WEB_HOSTPORT
+        fromService:
+          type: web
+          name: blueprint-web
+          property: hostport
+      - key: CRON_SECRET
+        fromService:
+          type: web
+          name: blueprint-web
+          envVarKey: CRON_SECRET

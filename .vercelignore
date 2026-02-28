@@ -1,0 +1,5 @@
+node_modules
+.next
+.tools
+.playwright-cli
+output

@@ -1,0 +1,464 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum MembershipRole {
+  ADMIN
+  MANAGER
+  AE
+  SE
+  SDR
+}
+
+enum CrmProvider {
+  HUBSPOT
+}
+
+enum CrmConnectionStatus {
+  CONNECTED
+  DISCONNECTED
+  ERROR
+}
+
+enum DealHealth {
+  GREEN
+  YELLOW
+  RED
+}
+
+enum ModuleFieldType {
+  TEXT
+  SELECT
+  MULTISELECT
+  DATE
+  BOOLEAN
+}
+
+enum DealUpdateType {
+  WEEKLY
+  MEETING
+  HANDOFF
+}
+
+enum SyncTrigger {
+  MANUAL
+  EOD
+}
+
+enum SyncStatus {
+  QUEUED
+  RUNNING
+  SUCCESS
+  FAILED
+  CONFLICT
+}
+
+enum SyncItemStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  CONFLICT
+}
+
+enum CrmWriteType {
+  FIELD_PATCH
+  NOTE_CREATE
+}
+
+enum NotificationStatus {
+  UNREAD
+  READ
+  ARCHIVED
+}
+
+enum NotificationSeverity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+enum ConflictResolution {
+  ACCEPT_CRM
+  OVERWRITE_CRM
+}
+
+model Workspace {
+  id               String         @id @default(cuid())
+  name             String
+  timezone         String         @default("America/Los_Angeles")
+  eodSyncEnabled   Boolean        @default(true) @map("eod_sync_enabled")
+  eodSyncTimeLocal String         @default("19:00") @map("eod_sync_time_local")
+  staleDays        Int            @default(7) @map("stale_days")
+  createdAt        DateTime       @default(now()) @map("created_at")
+  updatedAt        DateTime       @updatedAt @map("updated_at")
+  memberships      Membership[]
+  crmConnections   CrmConnection[]
+  deals            Deal[]
+  templates        Template[]
+  syncJobs         SyncJob[]
+  notifications    Notification[]
+  auditEvents      AuditEvent[]
+  metricEvents     MetricEvent[]
+
+  @@map("workspaces")
+}
+
+model User {
+  id              String          @id @default(cuid())
+  email           String          @unique
+  name            String
+  authProvider    String          @default("supabase") @map("auth_provider")
+  createdAt       DateTime        @default(now()) @map("created_at")
+  updatedAt       DateTime        @updatedAt @map("updated_at")
+  memberships     Membership[]
+  ownedDeals      Deal[]          @relation("DealOwner")
+  draftFields     DealDraftField[] @relation("DraftUpdatedBy")
+  dealUpdates     DealUpdate[]    @relation("DealUpdateCreator")
+  dealModules     DealModule[]    @relation("DealModuleUpdater")
+  syncJobs        SyncJob[]       @relation("SyncRequestedBy")
+  notifications   Notification[]
+  auditEvents     AuditEvent[]    @relation("AuditActor")
+  metricEvents    MetricEvent[]
+  resolvedConflicts DealConflict[] @relation("ConflictResolvedBy")
+
+  @@map("users")
+}
+
+model Membership {
+  userId      String         @map("user_id")
+  workspaceId String         @map("workspace_id")
+  role        MembershipRole
+  active      Boolean        @default(true)
+  createdAt   DateTime       @default(now()) @map("created_at")
+  updatedAt   DateTime       @updatedAt @map("updated_at")
+  user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace   Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@id([userId, workspaceId])
+  @@index([workspaceId, role])
+  @@map("memberships")
+}
+
+model CrmConnection {
+  id                    String              @id @default(cuid())
+  workspaceId           String              @map("workspace_id")
+  provider              CrmProvider
+  encryptedAccessToken  String?             @map("encrypted_access_token")
+  encryptedRefreshToken String?             @map("encrypted_refresh_token")
+  scopes                String[]            @default([])
+  status                CrmConnectionStatus @default(DISCONNECTED)
+  expiresAt             DateTime?           @map("expires_at")
+  createdAt             DateTime            @default(now()) @map("created_at")
+  updatedAt             DateTime            @updatedAt @map("updated_at")
+  workspace             Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, provider])
+  @@map("crm_connections")
+}
+
+model Deal {
+  id                     String          @id @default(cuid())
+  workspaceId            String          @map("workspace_id")
+  crmDealId              String          @map("crm_deal_id")
+  accountName            String          @map("account_name")
+  primaryContactName     String?         @map("primary_contact_name")
+  primaryContactEmail    String?         @map("primary_contact_email")
+  amount                 Decimal?        @db.Decimal(18, 2)
+  closeDate              DateTime?       @map("close_date")
+  stage                  String
+  ownerUserId            String?         @map("owner_user_id")
+  nextStep               String?         @map("next_step")
+  nextStepDueDate        DateTime?       @map("next_step_due_date")
+  risks                  String[]        @default([])
+  blockers               String[]        @default([])
+  competition            String[]        @default([])
+  health                 DealHealth      @default(YELLOW)
+  stale                  Boolean         @default(false)
+  lastActivityAt         DateTime?       @map("last_activity_at")
+  lastBlueprintUpdatedAt DateTime        @default(now()) @map("last_blueprint_updated_at")
+  lastCrmSyncAt          DateTime?       @map("last_crm_sync_at")
+  lastCrmModifiedAt      DateTime?       @map("last_crm_modified_at")
+  stageMovedCount30d     Int             @default(0) @map("stage_moved_count_30d")
+  createdAt              DateTime        @default(now()) @map("created_at")
+  updatedAt              DateTime        @updatedAt @map("updated_at")
+  workspace              Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  owner                  User?           @relation("DealOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  draftFields            DealDraftField[]
+  modules                DealModule[]
+  updates                DealUpdate[]
+  syncJobItems           SyncJobItem[]
+  writeLogs              CrmWriteLog[]
+  notifications          Notification[]
+  conflicts              DealConflict[]
+
+  @@unique([workspaceId, crmDealId])
+  @@index([workspaceId, stale, health])
+  @@index([workspaceId, stage])
+  @@map("deals")
+}
+
+model DealDraftField {
+  id               String   @id @default(cuid())
+  dealId           String   @map("deal_id")
+  fieldKey         String   @map("field_key")
+  draftValueJson   Json?    @map("draft_value_json")
+  baseCrmValueJson Json?    @map("base_crm_value_json")
+  dirty            Boolean  @default(true)
+  updatedBy        String?  @map("updated_by")
+  updatedAt        DateTime @default(now()) @map("updated_at")
+  createdAt        DateTime @default(now()) @map("created_at")
+  deal             Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  updatedByUser    User?    @relation("DraftUpdatedBy", fields: [updatedBy], references: [id], onDelete: SetNull)
+
+  @@unique([dealId, fieldKey])
+  @@index([dealId, dirty])
+  @@map("deal_draft_fields")
+}
+
+model Template {
+  id                String             @id @default(cuid())
+  workspaceId       String             @map("workspace_id")
+  role              MembershipRole
+  name              String
+  active            Boolean            @default(true)
+  createdAt         DateTime           @default(now()) @map("created_at")
+  updatedAt         DateTime           @updatedAt @map("updated_at")
+  workspace         Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  modules           TemplateModule[]
+  stageRequirements StageRequirement[]
+
+  @@index([workspaceId, role, active])
+  @@map("templates")
+}
+
+model TemplateModule {
+  id                String         @id @default(cuid())
+  templateId        String         @map("template_id")
+  key               String
+  title             String
+  requiredByDefault Boolean        @default(false) @map("required_by_default")
+  sortOrder         Int            @default(0) @map("sort_order")
+  createdAt         DateTime       @default(now()) @map("created_at")
+  updatedAt         DateTime       @updatedAt @map("updated_at")
+  template          Template       @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  fields            TemplateField[]
+  dealModules       DealModule[]
+
+  @@unique([templateId, key])
+  @@map("template_modules")
+}
+
+model TemplateField {
+  id                       String          @id @default(cuid())
+  moduleId                 String          @map("module_id")
+  key                      String
+  label                    String
+  type                     ModuleFieldType
+  optionsJson              Json?           @map("options_json")
+  crmPropertyNameNullable  String?         @map("crm_property_name_nullable")
+  requiredRulesJson        Json?           @map("required_rules_json")
+  sortOrder                Int             @default(0) @map("sort_order")
+  createdAt                DateTime        @default(now()) @map("created_at")
+  updatedAt                DateTime        @updatedAt @map("updated_at")
+  module                   TemplateModule  @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  dealModuleValues         DealModuleValue[]
+
+  @@unique([moduleId, key])
+  @@map("template_fields")
+}
+
+model StageRequirement {
+  id             String   @id @default(cuid())
+  templateId     String   @map("template_id")
+  stage          String
+  requiredFields Json     @map("required_fields")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+  template       Template @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@unique([templateId, stage])
+  @@map("stage_requirements")
+}
+
+model DealModule {
+  id               String            @id @default(cuid())
+  dealId           String            @map("deal_id")
+  templateModuleId String            @map("template_module_id")
+  title            String
+  lastUpdatedAt    DateTime          @default(now()) @map("last_updated_at")
+  lastUpdatedBy    String?           @map("last_updated_by")
+  createdAt        DateTime          @default(now()) @map("created_at")
+  updatedAt        DateTime          @updatedAt @map("updated_at")
+  deal             Deal              @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  templateModule   TemplateModule    @relation(fields: [templateModuleId], references: [id], onDelete: Cascade)
+  updatedByUser    User?             @relation("DealModuleUpdater", fields: [lastUpdatedBy], references: [id], onDelete: SetNull)
+  values           DealModuleValue[]
+
+  @@unique([dealId, templateModuleId])
+  @@map("deal_modules")
+}
+
+model DealModuleValue {
+  id            String       @id @default(cuid())
+  dealModuleId  String       @map("deal_module_id")
+  templateFieldId String     @map("template_field_id")
+  valueJson     Json?        @map("value_json")
+  dirty         Boolean      @default(true)
+  createdAt     DateTime     @default(now()) @map("created_at")
+  updatedAt     DateTime     @updatedAt @map("updated_at")
+  dealModule    DealModule   @relation(fields: [dealModuleId], references: [id], onDelete: Cascade)
+  templateField TemplateField @relation(fields: [templateFieldId], references: [id], onDelete: Cascade)
+
+  @@unique([dealModuleId, templateFieldId])
+  @@map("deal_module_values")
+}
+
+model DealUpdate {
+  id               String         @id @default(cuid())
+  dealId           String         @map("deal_id")
+  type             DealUpdateType
+  title            String
+  bodyMarkdown     String         @map("body_markdown")
+  risksJson        Json?          @map("risks_json")
+  blockersJson     Json?          @map("blockers_json")
+  nextStepOverride String?        @map("next_step_override")
+  escalationText   String?        @map("escalation_text")
+  createdBy        String         @map("created_by")
+  pushedToCrm      Boolean        @default(false) @map("pushed_to_crm")
+  crmNoteId        String?        @map("crm_note_id")
+  createdAt        DateTime       @default(now()) @map("created_at")
+  deal             Deal           @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  creator          User           @relation("DealUpdateCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+
+  @@index([dealId, createdAt])
+  @@map("deal_updates")
+}
+
+model SyncJob {
+  id              String         @id @default(cuid())
+  workspaceId     String         @map("workspace_id")
+  trigger         SyncTrigger
+  status          SyncStatus     @default(QUEUED)
+  requestedBy     String?        @map("requested_by")
+  startedAt       DateTime?      @map("started_at")
+  completedAt     DateTime?      @map("completed_at")
+  errorSummary    String?        @map("error_summary")
+  createdAt       DateTime       @default(now()) @map("created_at")
+  updatedAt       DateTime       @updatedAt @map("updated_at")
+  workspace       Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  requester       User?          @relation("SyncRequestedBy", fields: [requestedBy], references: [id], onDelete: SetNull)
+  items           SyncJobItem[]
+
+  @@index([workspaceId, status])
+  @@map("sync_jobs")
+}
+
+model SyncJobItem {
+  id                String         @id @default(cuid())
+  syncJobId         String         @map("sync_job_id")
+  dealId            String         @map("deal_id")
+  status            SyncItemStatus @default(PENDING)
+  conflictCount     Int            @default(0) @map("conflict_count")
+  fieldsWrittenCount Int           @default(0) @map("fields_written_count")
+  noteCreated       Boolean        @default(false) @map("note_created")
+  errorDetail       String?        @map("error_detail")
+  createdAt         DateTime       @default(now()) @map("created_at")
+  updatedAt         DateTime       @updatedAt @map("updated_at")
+  syncJob           SyncJob        @relation(fields: [syncJobId], references: [id], onDelete: Cascade)
+  deal              Deal           @relation(fields: [dealId], references: [id], onDelete: Cascade)
+
+  @@unique([syncJobId, dealId])
+  @@index([dealId, status])
+  @@map("sync_job_items")
+}
+
+model CrmWriteLog {
+  id               String       @id @default(cuid())
+  workspaceId      String       @map("workspace_id")
+  dealId           String       @map("deal_id")
+  writeType        CrmWriteType @map("write_type")
+  idempotencyKey   String       @unique @map("idempotency_key")
+  crmObjectIdNullable String?   @map("crm_object_id_nullable")
+  status           SyncStatus   @default(QUEUED)
+  payloadJson      Json?        @map("payload_json")
+  createdAt        DateTime     @default(now()) @map("created_at")
+  updatedAt        DateTime     @updatedAt @map("updated_at")
+  deal             Deal         @relation(fields: [dealId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt])
+  @@map("crm_write_log")
+}
+
+model Notification {
+  id          String             @id @default(cuid())
+  workspaceId String             @map("workspace_id")
+  userId      String             @map("user_id")
+  dealId      String?            @map("deal_id")
+  type        String
+  severity    NotificationSeverity
+  title       String
+  body        String
+  status      NotificationStatus @default(UNREAD)
+  createdAt   DateTime           @default(now()) @map("created_at")
+  readAt      DateTime?          @map("read_at")
+  workspace   Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deal        Deal?              @relation(fields: [dealId], references: [id], onDelete: SetNull)
+
+  @@index([userId, status, createdAt])
+  @@map("notifications")
+}
+
+model AuditEvent {
+  id           String    @id @default(cuid())
+  workspaceId  String    @map("workspace_id")
+  actorUserId  String?   @map("actor_user_id")
+  eventType    String    @map("event_type")
+  entityType   String    @map("entity_type")
+  entityId     String    @map("entity_id")
+  payloadJson  Json?     @map("payload_json")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  actor        User?     @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, createdAt])
+  @@index([entityType, entityId])
+  @@map("audit_events")
+}
+
+model DealConflict {
+  id              String              @id @default(cuid())
+  dealId           String              @map("deal_id")
+  fieldKey         String              @map("field_key")
+  crmValueJson     Json                @map("crm_value_json")
+  localDraftValueJson Json             @map("local_draft_value_json")
+  baseValueJson    Json                @map("base_value_json")
+  detectedAt       DateTime            @default(now()) @map("detected_at")
+  resolvedAt       DateTime?           @map("resolved_at")
+  resolvedBy       String?             @map("resolved_by")
+  resolution       ConflictResolution?
+  deal             Deal                @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  resolver         User?               @relation("ConflictResolvedBy", fields: [resolvedBy], references: [id], onDelete: SetNull)
+
+  @@index([dealId, resolvedAt])
+  @@map("deal_conflicts")
+}
+
+model MetricEvent {
+  id          String    @id @default(cuid())
+  workspaceId String    @map("workspace_id")
+  userId      String?   @map("user_id")
+  eventName   String    @map("event_name")
+  payloadJson Json?     @map("payload_json")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user        User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, eventName, createdAt])
+  @@map("metric_events")
+}
