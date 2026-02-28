@@ -6,6 +6,7 @@ import { SyncPreviewModal } from "@/components/sync-preview-modal";
 import { Timeline } from "@/components/timeline";
 import { UpdateComposer } from "@/components/update-composer";
 import { getUserContext } from "@/lib/auth/session";
+import { formatDateDisplay } from "@/lib/format/date-display";
 import { getDealDossier } from "@/lib/services/deals";
 import { getDefaultLens } from "@/lib/services/workspaces";
 
@@ -46,7 +47,7 @@ export default async function DealDossierPage({
               <StatusBadge label={dossier.deal.stage} variant="stage" />
               <StatusBadge label={dossier.deal.health} variant="health" />
               <span className="text-sm text-slate-600">
-                Close: {dossier.deal.closeDate ? new Date(dossier.deal.closeDate).toLocaleDateString() : "TBD"}
+                Close: {formatDateDisplay(dossier.deal.closeDate, "TBD")}
               </span>
               <span className="text-sm text-slate-600">
                 Amount: {dossier.deal.amount ? `$${new Intl.NumberFormat("en-US").format(dossier.deal.amount)}` : "-"}
